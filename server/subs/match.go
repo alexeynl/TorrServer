@@ -26,12 +26,15 @@ type Track struct {
 	Title     string `json:"title"`
 	Lang      string `json:"lang"`   // "ru", "en", ... or "und"
 	Format    string `json:"format"` // "srt", "ass", "ssa", "vtt"
+	Size      int64  `json:"size"`
 
 	dir string // cleaned name of the folder, see dirLabel
 }
 
-// Subtitle files are small (kilobytes); anything larger is ignored.
-const MaxSubSize = 2 << 20
+// MaxSubSize is the size limit that Match applies: larger subtitle files are ignored.
+// The server passes the limit from its settings (MaxSubtitleSizeMB) to MatchLimit;
+// keep this value in line with settings.DefaultMaxSubtitleSizeMB.
+const MaxSubSize = 16 << 20
 
 var (
 	subExt   = map[string]bool{".srt": true, ".ass": true, ".ssa": true, ".vtt": true}
@@ -65,6 +68,7 @@ func IsVideo(p string) bool {
 }
 
 // Match returns the subtitle tracks that belong to the given video file.
+// Files larger than MaxSubSize are ignored; see MatchLimit.
 func Match(video FileInfo, files []FileInfo) []Track {
 	videoDir := path.Dir(video.Path)
 	videoBase := stripExt(path.Base(video.Path))
@@ -85,11 +89,20 @@ func Match(video FileInfo, files []FileInfo) []Track {
 	several := len(videoBases) > 1
 	// An episode number is a usable key only if it tells this video apart from the others.
 	byNumber := several && uniqueEpisode(videoBase, videoBases)
+	tracks, _ := MatchLimit(video, files, MaxSubSize)
+	return tracks
+}
 
-	var out []Track
+// MatchLimit is Match with a size limit in bytes. Besides the tracks it returns the
+// tracks that belong to the video but were left out because their file is larger than
+// maxSize, so that the caller can tell why a subtitle file is missing.
+func MatchLimit(video FileInfo, files []FileInfo, maxSize int64) ([]Track, []Track) {
+	v := extfiles.NewVideo(video, files)
+
+	var out, tooLarge []Track
 	for _, f := range files {
 		ext := strings.ToLower(path.Ext(f.Path))
-		if !subExt[ext] || f.Size > MaxSubSize {
+		if !subExt[ext] {
 			continue
 		}
 		dir := path.Dir(f.Path)
@@ -106,13 +119,21 @@ func Match(video FileInfo, files []FileInfo) []Track {
 		if several && !sameEpisode(videoBase, stripExt(path.Base(f.Path)), byNumber) {
 			continue
 		}
-		out = append(out, Track{
+		track := Track{
 			FileIndex: f.Index,
 			Name:      path.Base(f.Path),
 			Lang:      langOf(f.Path),
 			Format:    strings.TrimPrefix(ext, "."),
 			dir:       dirLabel(dir),
 		})
+			Size:      int64(f.Size),
+			dir:       dirLabel(path.Dir(f.Path)),
+		}
+		if track.Size > maxSize {
+			tooLarge = append(tooLarge, track)
+			continue
+		}
+		out = append(out, track)
 	}
 
 	// Title is the file name; when several tracks share a file name, the cleaned
@@ -134,7 +155,7 @@ func Match(video FileInfo, files []FileInfo) []Track {
 		}
 		return out[i].Title < out[j].Title
 	})
-	return out
+	return out, tooLarge
 }
 
 // dirLabel turns the name of a folder into a short label: square and curly brackets and

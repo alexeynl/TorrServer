@@ -34,10 +34,13 @@ const (
 	maxExternalSubtitles        = 16
 	maxExternalSubtitleListSize = 1 << 20
 	maxExternalSubtitleSize     = 4 << 20
-	externalSubtitleTimeout     = 15 * time.Second
 
-	// How many times a master playlist request may retry loading tracks that failed
-	// for a temporary reason (timeout, 5xx) before the task gives up on them.
+	// Defaults of the settings ExternalSubtitleTimeoutSec (the time limit for loading all
+	// tracks of a video) and ExternalSubtitleAttempts (how many times a master playlist
+	// request may try loading tracks that failed for a temporary reason - timeout, 5xx -
+	// before the task gives up on them). The values in effect come from server/settings,
+	// see settings.ExternalSubtitleTimeout and settings.ExternalSubtitleAttempts.
+	externalSubtitleTimeout     = 15 * time.Second
 	maxExternalSubtitleAttempts = 3
 )
 
@@ -168,7 +171,7 @@ func (t *Task) loadExternalSubtitles(ctx context.Context, base string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, externalSubtitleTimeout)
+	ctx, cancel := context.WithTimeout(ctx, settings.ExternalSubtitleTimeout())
 	defer cancel()
 
 	tracks, failed, err := fetchExternalSubtitles(ctx, base)
@@ -182,7 +185,7 @@ func (t *Task) loadExternalSubtitles(ctx context.Context, base string) {
 		return
 	}
 	t.externalAttempts++
-	if t.externalAttempts >= maxExternalSubtitleAttempts {
+	if t.externalAttempts >= settings.ExternalSubtitleAttempts() {
 		log.Printf("[gst] external subtitles for %s/%s: giving up on %d track(s) after %d attempts", t.ID, t.FileID, failed, t.externalAttempts)
 		return
 	}
