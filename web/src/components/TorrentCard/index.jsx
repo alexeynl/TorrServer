@@ -31,6 +31,7 @@ import AddDialog from 'components/Add/AddDialog'
 import { StyledDialog } from 'style/CustomMaterialUiStyles'
 import useOnStandaloneAppOutsideClick from 'utils/useOnStandaloneAppOutsideClick'
 import { useBooleanPlayerPreference } from 'utils/PlayerPreferences'
+import { subsListUrl } from 'utils/Subs'
 import { GETTING_INFO, IN_DB, CLOSED, PRELOAD, WORKING } from 'torrentStates'
 import { TORRENT_CATEGORIES } from 'components/categories'
 import VideoPlayer from 'components/VideoPlayer'
@@ -250,6 +251,7 @@ const Torrent = ({ torrent }) => {
       label: episodeLabel(file.path, index),
       videoSrc: hls ? gstreamerMasterUrl(hash, file.id) : downloadSrc,
       downloadSrc,
+      subsSrc: subsListUrl(hash, file.id),
       hls,
       heartbeatSrc: hls ? gstreamerHeartbeatUrl(hash) : '',
     }
@@ -440,6 +442,7 @@ const Torrent = ({ torrent }) => {
                 videoSrc={singlePlayer.videoSrc}
                 downloadSrc={singlePlayer.downloadSrc}
                 captionSrc={getVideoCaption(singlePlayer.path)}
+                subsSrc={singlePlayer.subsSrc}
                 heartbeatSrc={singlePlayer.heartbeatSrc}
                 onNotSupported={() => markPlayerUnsupported(singlePlayer.key)}
               />
@@ -503,6 +506,7 @@ const Torrent = ({ torrent }) => {
               videoSrc={selectedPlayer.videoSrc}
               downloadSrc={selectedPlayer.downloadSrc}
               captionSrc={selectedPlayer.hls ? '' : getVideoCaption(selectedPlayer.path)}
+              subsSrc={selectedPlayer.subsSrc}
               hls={selectedPlayer.hls}
               heartbeatSrc={selectedPlayer.heartbeatSrc}
               initiallyOpen
