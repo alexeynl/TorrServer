@@ -329,6 +329,7 @@ const embeddedHlsPosition = track => {
 //  kind 'hls'   - a track of the HLS playlist (embedded tracks and the WebVTT copy of external files)
 //  kind 'ass'   - an external ASS/SSA file shown with its styling
 //  kind 'text'  - an external file shown as WebVTT (direct playback only)
+//  kind 'eass'  - an embedded ASS/SSA track shown with its styling (loaded in windows while the video plays)
 //  kind 'etext' - an embedded track shown as WebVTT (loaded in windows), when it is not in the HLS playlist
 const buildSubtitleMenu = (hlsMode, subtitleTracks, externalTracks, assStyled, embeddedTracks = []) => {
   const items = []
@@ -340,7 +341,12 @@ const buildSubtitleMenu = (hlsMode, subtitleTracks, externalTracks, assStyled, e
     if (position === null) {
       const embedded = embeddedByIndex.get(embeddedHlsPosition(track))
       if (embedded) embeddedShown.add(embedded.index)
-      items.push({ key: `hls:${index}`, label: `[int] ${subtitleLabel(track)}`, kind: 'hls', hlsIndex: index })
+      if (embedded && assStyled && isAssTrack(embedded)) {
+        // the track is shown with its styling instead of its WebVTT copy from the playlist
+        items.push({ key: `eass:${embedded.index}`, label: `[int] ${embeddedLabel(embedded)}`, kind: 'eass', track: embedded })
+      } else {
+        items.push({ key: `hls:${index}`, label: `[int] ${subtitleLabel(track)}`, kind: 'hls', hlsIndex: index })
+      }
     } else {
       hlsExternal.set(position, { track, index })
     }
@@ -349,7 +355,9 @@ const buildSubtitleMenu = (hlsMode, subtitleTracks, externalTracks, assStyled, e
   // embedded tracks that are not in the HLS playlist (direct playback, or the pipeline does not offer them)
   embeddedTracks.forEach(track => {
     if (embeddedShown.has(track.index)) return
-    items.push({ key: `etext:${track.index}`, label: `[int] ${embeddedLabel(track)}`, kind: 'etext', track })
+    const label = `[int] ${embeddedLabel(track)}`
+    if (assStyled && isAssTrack(track)) items.push({ key: `eass:${track.index}`, label, kind: 'eass', track })
+    else items.push({ key: `etext:${track.index}`, label, kind: 'etext', track })
   })
 
   externalTracks.forEach((track, position) => {
@@ -432,7 +440,7 @@ const VideoPlayer = ({
   const [subtitleTrack, setSubtitleTrack] = useState(-1)
   const [externalTracks, setExternalTracks] = useState([])
   const [embeddedTracks, setEmbeddedTracks] = useState([])
-  const [externalKey, setExternalKey] = useState(null) // 'ass:<index>', 'text:<index>' or 'etext:<index>' of the selected track
+  const [externalKey, setExternalKey] = useState(null) // 'ass:<index>', 'text:<index>', 'eass:<index>' or 'etext:<index>' of the selected track
 
   const setVideoNode = useCallback(node => {
     videoRef.current = node
@@ -642,7 +650,8 @@ const VideoPlayer = ({
 
   // Shows a subtitle track that is not in the HLS playlist. External files: variant 'ass' draws it with its
   // styling, 'text' shows it as WebVTT (direct playback; with HLS the server provides the WebVTT copy).
-  // Tracks inside an mkv file are loaded in windows while the video plays: 'etext' shows a track as WebVTT cues
+  // Tracks inside an mkv file are loaded in windows while the video plays: 'eass' draws an ASS track with its
+  // styling, 'etext' shows a track as WebVTT cues
   const selectExternal = useCallback(
     async (track, variant) => {
       const video = videoRef.current
@@ -675,6 +684,28 @@ const VideoPlayer = ({
           // the file could not be read: leave the player without subtitles
           if (token === loadTokenRef.current) setExternalKey(null)
         }
+      } else if (variant === 'eass') {
+        // an embedded ASS track: loaded in windows while the video plays
+        const fontFiles = (await fontsRequestRef.current) || []
+        if (token !== loadTokenRef.current || !videoRef.current || !wrapperRef.current) return
+        if (!assRef.current) assRef.current = new AssPlayer(video, wrapperRef.current)
+        const ass = assRef.current
+        ass.options = { ...assOptionsRef.current, fontFiles }
+        embeddedRef.current = new EmbeddedSubs({
+          url: embeddedTrackUrl(track),
+          format: 'ass',
+          video,
+          onFirst: text => {
+            if (token === loadTokenRef.current) ass.load(text, 'embedded')
+          },
+          onUpdate: text => {
+            if (token === loadTokenRef.current) ass.update(text)
+          },
+          onError: () => {
+            if (token === loadTokenRef.current) setExternalKey(null)
+          },
+        })
+        embeddedRef.current.start()
       } else if (variant === 'etext') {
         // an embedded track as text: the WebVTT windows are added to a text track as cues (TextCues draws them)
         const element = document.createElement('track')
