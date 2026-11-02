@@ -72,6 +72,18 @@ export default class JassubRenderer {
     document.addEventListener('fullscreenchange', this.onFullscreen)
   }
 
+  // Replaces the track on the fly (an embedded track is loaded in windows). False: this version of JASSUB
+  // cannot do it, the caller loads the track again.
+  update(text) {
+    if (this.destroyed || !this.instance || typeof this.instance.setTrack !== 'function') return false
+    try {
+      this.instance.setTrack(text)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   destroy() {
     this.destroyed = true
     document.removeEventListener('fullscreenchange', this.onFullscreen)

@@ -30,12 +30,14 @@ export default class AssPlayer {
     this.jassub = null
     this.token = 0
     this.kind = null
+    this.fontSource = undefined
   }
 
   // fontSource: where the fonts of this track should come from first when the same font is in several places
   // ('external': files of the torrent, 'embedded': attached to the video file)
   async load(text, fontSource) {
     this.token += 1
+    this.fontSource = fontSource
     const { token } = this
     this.unload()
 
@@ -85,6 +87,16 @@ export default class AssPlayer {
     this.simple.loadScript(script)
     this.kind = 'simple'
     log(`simple renderer, ${faces.length} font face(s) from the torrent`)
+  }
+
+  // Replaces the text of the shown track on the fly (embedded tracks are loaded in windows). The fonts are
+  // already known from the first load.
+  async update(text) {
+    if (this.kind === 'full' && this.jassub) {
+      if (!this.jassub.update(text)) await this.load(text, this.fontSource)
+    } else if (this.kind === 'simple' && this.simple) {
+      this.simple.load(text)
+    }
   }
 
   unload() {
