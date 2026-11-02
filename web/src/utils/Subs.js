@@ -15,8 +15,14 @@ export const fetchExternalSubtitles = async (url, signal) => {
   }
 }
 
-// Absolute link to the subtitle file (the server converts it to WebVTT)
-export const subtitleFileUrl = track => new URL(track.url, `${getTorrServerHost()}/`).toString()
+export const isAssTrack = track => track.format === 'ass' || track.format === 'ssa'
+
+// Absolute link to the subtitle file; original=true returns the file as is (needed for ASS)
+export const subtitleFileUrl = (track, original = false) => {
+  const url = new URL(track.url, `${getTorrServerHost()}/`)
+  if (original) url.searchParams.set('format', 'original')
+  return url.toString()
+}
 
 // File index (the "index" query parameter) of a stream link such as the one used for captions
 export const linkFileIndex = link => {
