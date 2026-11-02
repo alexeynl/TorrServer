@@ -31,8 +31,13 @@ import { StyledDialog } from 'style/CustomMaterialUiStyles'
 import { useTranslation } from 'react-i18next'
 import AssPlayer from 'utils/ass'
 import TextCues from 'utils/TextCues'
+import EmbeddedSubs, { parseVttCues } from 'utils/EmbeddedSubs'
 import { useBooleanPlayerPreference, useStringPlayerPreference } from 'utils/PlayerPreferences'
 import {
+  embeddedLabel,
+  embeddedListUrl,
+  embeddedTrackUrl,
+  fetchEmbeddedSubtitles,
   fetchExternalSubtitles,
   fetchFontFiles,
   fontsListUrl,
@@ -311,22 +316,40 @@ const externalHlsPosition = track => {
   return match && Number(match[1]) >= 1000 ? Number(match[1]) - 1000 : null
 }
 
+// Embedded tracks of the file in the HLS playlist are numbered from 0 (the number of the subtitle track in
+// the file); returns that number or null for external tracks
+const embeddedHlsPosition = track => {
+  const match = /\/subs\/(\d+)\.m3u8/.exec(track.url || '')
+  return match && Number(match[1]) < 1000 ? Number(match[1]) : null
+}
+
 // Entries of the subtitle menu. Labels start with [int] for tracks inside the video file and
 // with [ext] for external files. An ASS/SSA file is offered in one format: with styling
 // (rendered by the player) or as text (WebVTT), depending on the setting.
-//  kind 'hls'  - a track of the HLS playlist (embedded tracks and the WebVTT copy of external files)
-//  kind 'ass'  - an ASS/SSA file shown with its styling
-//  kind 'text' - an external file shown as WebVTT (direct playback only)
-const buildSubtitleMenu = (hlsMode, subtitleTracks, externalTracks, assStyled) => {
+//  kind 'hls'   - a track of the HLS playlist (embedded tracks and the WebVTT copy of external files)
+//  kind 'ass'   - an external ASS/SSA file shown with its styling
+//  kind 'text'  - an external file shown as WebVTT (direct playback only)
+//  kind 'etext' - an embedded track shown as WebVTT (loaded in windows), when it is not in the HLS playlist
+const buildSubtitleMenu = (hlsMode, subtitleTracks, externalTracks, assStyled, embeddedTracks = []) => {
   const items = []
   const hlsExternal = new Map()
+  const embeddedByIndex = new Map(embeddedTracks.map(track => [track.index, track]))
+  const embeddedShown = new Set()
   subtitleTracks.forEach((track, index) => {
     const position = externalHlsPosition(track)
     if (position === null) {
+      const embedded = embeddedByIndex.get(embeddedHlsPosition(track))
+      if (embedded) embeddedShown.add(embedded.index)
       items.push({ key: `hls:${index}`, label: `[int] ${subtitleLabel(track)}`, kind: 'hls', hlsIndex: index })
     } else {
       hlsExternal.set(position, { track, index })
     }
+  })
+
+  // embedded tracks that are not in the HLS playlist (direct playback, or the pipeline does not offer them)
+  embeddedTracks.forEach(track => {
+    if (embeddedShown.has(track.index)) return
+    items.push({ key: `etext:${track.index}`, label: `[int] ${embeddedLabel(track)}`, kind: 'etext', track })
   })
 
   externalTracks.forEach((track, position) => {
@@ -381,6 +404,7 @@ const VideoPlayer = ({
   const hlsRef = useRef(null)
   const assRef = useRef(null)
   const dynamicTrackRef = useRef(null)
+  const embeddedRef = useRef(null)
   const loadTokenRef = useRef(0)
   const assStyled = useBooleanPlayerPreference('isAssStyled', true)
   const assFonts = useBooleanPlayerPreference('assFonts', true)
@@ -407,7 +431,8 @@ const VideoPlayer = ({
   const [subtitleTracks, setSubtitleTracks] = useState([])
   const [subtitleTrack, setSubtitleTrack] = useState(-1)
   const [externalTracks, setExternalTracks] = useState([])
-  const [externalKey, setExternalKey] = useState(null) // 'ass:<index>' or 'text:<index>' of the selected external track
+  const [embeddedTracks, setEmbeddedTracks] = useState([])
+  const [externalKey, setExternalKey] = useState(null) // 'ass:<index>', 'text:<index>' or 'etext:<index>' of the selected track
 
   const setVideoNode = useCallback(node => {
     videoRef.current = node
@@ -603,6 +628,10 @@ const VideoPlayer = ({
   }
   const clearExternal = useCallback(() => {
     loadTokenRef.current += 1
+    if (embeddedRef.current) {
+      embeddedRef.current.destroy()
+      embeddedRef.current = null
+    }
     if (assRef.current) assRef.current.unload()
     if (dynamicTrackRef.current) {
       dynamicTrackRef.current.remove()
@@ -611,8 +640,9 @@ const VideoPlayer = ({
     setExternalKey(null)
   }, [])
 
-  // Shows an external subtitle file: variant 'ass' draws it with its styling,
-  // 'text' shows it as WebVTT (direct playback; with HLS the server provides the WebVTT copy)
+  // Shows a subtitle track that is not in the HLS playlist. External files: variant 'ass' draws it with its
+  // styling, 'text' shows it as WebVTT (direct playback; with HLS the server provides the WebVTT copy).
+  // Tracks inside an mkv file are loaded in windows while the video plays: 'etext' shows a track as WebVTT cues
   const selectExternal = useCallback(
     async (track, variant) => {
       const video = videoRef.current
@@ -645,6 +675,39 @@ const VideoPlayer = ({
           // the file could not be read: leave the player without subtitles
           if (token === loadTokenRef.current) setExternalKey(null)
         }
+      } else if (variant === 'etext') {
+        // an embedded track as text: the WebVTT windows are added to a text track as cues (TextCues draws them)
+        const element = document.createElement('track')
+        element.kind = 'subtitles'
+        element.label = embeddedLabel(track)
+        if (track.lang && track.lang !== 'und') element.srclang = track.lang
+        video.appendChild(element)
+        dynamicTrackRef.current = element
+        element.track.mode = 'hidden'
+        const added = new Set()
+        const addCues = text => {
+          if (token !== loadTokenRef.current) return
+          parseVttCues(text).forEach(cue => {
+            if (added.has(cue.key)) return
+            added.add(cue.key)
+            try {
+              element.track.addCue(new window.VTTCue(cue.start, cue.end, cue.text))
+            } catch {
+              // the cue cannot be added: skip it
+            }
+          })
+        }
+        embeddedRef.current = new EmbeddedSubs({
+          url: embeddedTrackUrl(track, true),
+          format: 'vtt',
+          video,
+          onFirst: addCues,
+          onUpdate: addCues,
+          onError: () => {
+            if (token === loadTokenRef.current) setExternalKey(null)
+          },
+        })
+        embeddedRef.current.start()
       } else if (!hls) {
         const element = document.createElement('track')
         element.kind = 'subtitles'
@@ -671,6 +734,19 @@ const VideoPlayer = ({
     }
   }, [open, subsSrc])
 
+  // Tracks inside an mkv file (/subs/{hash}/{id}?embedded); an empty list for other files and old servers
+  useEffect(() => {
+    if (!open || !subsSrc) return undefined
+    const controller = new AbortController()
+    fetchEmbeddedSubtitles(embeddedListUrl(subsSrc), controller.signal).then(list => {
+      if (!controller.signal.aborted) setEmbeddedTracks(list)
+    })
+    return () => {
+      controller.abort()
+      setEmbeddedTracks([])
+    }
+  }, [open, subsSrc])
+
   // Fonts for ASS subtitles, from the torrent and from the video file, in one list. The request is made when
   // they can be used; a track waits for it. Old servers do not know ?fonts: the list is empty then.
   useEffect(() => {
@@ -693,13 +769,20 @@ const VideoPlayer = ({
   }, [externalTracks, hls, captionSrc, selectExternal])
 
   useEffect(() => {
-    if (open || !assRef.current) return
+    if (open) return
+    if (embeddedRef.current) {
+      embeddedRef.current.destroy()
+      embeddedRef.current = null
+    }
+    if (!assRef.current) return
     assRef.current.destroy()
     assRef.current = null
   }, [open])
 
   useEffect(
     () => () => {
+      if (embeddedRef.current) embeddedRef.current.destroy()
+      embeddedRef.current = null
       if (assRef.current) assRef.current.destroy()
       assRef.current = null
     },
@@ -765,7 +848,7 @@ const VideoPlayer = ({
     return () => document.removeEventListener('keydown', handleKey)
   }, [handleKey])
 
-  const subtitleMenu = buildSubtitleMenu(hls, subtitleTracks, externalTracks, assStyled)
+  const subtitleMenu = buildSubtitleMenu(hls, subtitleTracks, externalTracks, assStyled, embeddedTracks)
   const hasSubtitleMenu = subtitleMenu.length > 0
   const subtitlesOn = subtitleTrack >= 0 || externalKey !== null
   const isItemSelected = item => {

@@ -15,6 +15,31 @@ export const fetchExternalSubtitles = async (url, signal) => {
   }
 }
 
+// Embedded tracks of an mkv file: GET /subs/{hash}/{id}?embedded. An old server ignores the parameter and
+// answers with the usual list, so only the items marked as embedded are kept
+export const embeddedListUrl = subsUrl => `${subsUrl}${subsUrl.includes('?') ? '&' : '?'}embedded`
+
+export const fetchEmbeddedSubtitles = async (url, signal) => {
+  try {
+    const response = await fetch(url, { signal })
+    if (!response.ok) return []
+    const list = await response.json()
+    return Array.isArray(list) ? list.filter(track => track && track.embedded === true && track.url) : []
+  } catch {
+    return []
+  }
+}
+
+// Absolute link to an embedded track: its natural form (ASS for ASS/SSA, WebVTT for text) or WebVTT
+export const embeddedTrackUrl = (track, vtt = false) =>
+  new URL(vtt && track.vtt ? track.vtt : track.url, `${getTorrServerHost()}/`).toString()
+
+// Name of an embedded track: its title or the number
+export const embeddedLabel = track => {
+  const name = track.title || `#${track.index + 1}`
+  return track.lang && track.lang !== 'und' ? `${name} (${track.lang})` : name
+}
+
 export const isAssTrack = track => track.format === 'ass' || track.format === 'ssa'
 
 // Absolute link to the subtitle file; original=true returns the file as is (needed for ASS)
