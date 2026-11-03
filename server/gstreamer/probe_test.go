@@ -169,3 +169,29 @@ func TestValidateProbeAcceptsVP8OnlyWithTranscode(t *testing.T) {
 		t.Fatalf("VP8 with TranscodeVP8 was rejected: %v", err)
 	}
 }
+
+func TestProbeKeepsASSSubtitleCodec(t *testing.T) {
+	probe := probeFromDiscoverer(`
+Properties:
+  Duration: 0:24:00.042000000
+  container: Matroska
+    video #1: H.264 (High Profile)
+      Width: 1920
+      Height: 1080
+    subtitles #2: application/x-ass, codec_data=(buffer)5b5363726970
+      Tags:
+        subtitle codec: SubStation Alpha
+    subtitles #3: SubStation Alpha
+      Tags:
+        subtitle codec: SubStation Alpha
+`)
+	if len(probe.Tracks) != 3 {
+		t.Fatalf("Tracks len = %d", len(probe.Tracks))
+	}
+	for i := 1; i <= 2; i++ {
+		track := probe.Tracks[i]
+		if track.Codec != "ass" || track.CapsName != "application/x-ass" || !supportedSubtitleTrack(track) {
+			t.Fatalf("subtitle %d = %+v", i, track)
+		}
+	}
+}

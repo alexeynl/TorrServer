@@ -532,8 +532,12 @@ func parseDiscovererTrackLine(track *TrackInfo, line string) {
 			track.CapsName = codecToCapsName(track.Type, track.Codec)
 		}
 	case startsWithFold(line, "subtitle codec:"):
-		track.Codec = subtitleCodec(valueAfterColon(line))
-		track.CapsName = codecToCapsName(track.Type, track.Codec)
+		// The tag is only a display name ("SubStation Alpha"): it must not overwrite the codec
+		// that was already taken from the stream caps.
+		if track.Codec == "" || !knownSubtitleCodec(track.Codec) {
+			track.Codec = subtitleCodec(valueAfterColon(line))
+			track.CapsName = codecToCapsName(track.Type, track.Codec)
+		}
 	case startsWithFold(line, "Frame rate:"):
 		track.FrameRateNum, track.FrameRateDen = parseDiscovererRate(valueAfterColon(line))
 	}
@@ -621,6 +625,14 @@ func codecToCapsName(kind string, values ...string) string {
 	return ""
 }
 
+func knownSubtitleCodec(codec string) bool {
+	switch codec {
+	case "text", "subrip", "utf8", "ass", "ssa", "pgs", "dvd", "kate":
+		return true
+	}
+	return false
+}
+
 func subtitleCodec(value string) string {
 	codec := strings.ToLower(strings.TrimSpace(value))
 	switch {
@@ -632,6 +644,9 @@ func subtitleCodec(value string) string {
 		return "ass"
 	case strings.Contains(codec, "ssa"):
 		return "ssa"
+	case strings.Contains(codec, "substation"):
+		// the tag name of ASS and SSA in GStreamer: "SubStation Alpha" / "Advanced SubStation Alpha"
+		return "ass"
 	case strings.Contains(codec, "pgs"):
 		return "pgs"
 	case strings.Contains(codec, "dvd"):
