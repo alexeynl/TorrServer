@@ -29,6 +29,7 @@ type subTrackJS struct {
 //	@Description	With "track": return that subtitle file, by default converted to WebVTT.
 //	@Description	"format": "vtt" (default) or "original" (no conversion). "encoding": output charset, default utf8.
 //	@Description	With "fonts": list the fonts for ASS subtitles of the video: [{source, name, type, size, url}].
+//	@Description	With "font": the bytes of a font attached to the video file (Matroska).
 //	@Description	With "embedded": list the subtitle tracks inside the video file (Matroska), or one track with "embedded=N"
 //	@Description	(optional "format": ass or vtt; "from" and "to": a window in seconds).
 //
@@ -39,7 +40,8 @@ type subTrackJS struct {
 //	@Param			track	query	int		false	"Subtitle file index (from the list)"
 //	@Param			format	query	string	false	"vtt (default) or original"
 //	@Param			encoding	query	string	false	"Output encoding, default utf8 (also: windows-1251)"
-//	@Param			fonts	query	string	false	"Present (no value): list the fonts of the video (font files of the torrent near it)"
+//	@Param			fonts	query	string	false	"Present (no value): list the fonts of the video (font files of the torrent near it and attached to the video file)"
+//	@Param			font	query	int		false	"Index of a font attached to the video file (from the list of fonts)"
 //	@Param			embedded	query	string	false	"Present (no value): list the subtitle tracks inside the video file; a number: that track"
 //	@Param			from	query	number	false	"With embedded=N: start of the window, seconds"
 //	@Param			to	query	number	false	"With embedded=N: end of the window, seconds; without it the whole track (reads the whole file)"
@@ -137,9 +139,12 @@ func subsTracks(c *gin.Context) {
 		return
 	}
 
-	// Fonts for ASS subtitles: ?fonts (list).
-	if _, ok := c.GetQuery("fonts"); ok {
-		subsFonts(c, spec.InfoHash.HexString(), *video, files)
+	// Fonts for ASS subtitles: ?fonts (list: files of the torrent and attachments of a Matroska file)
+	// or ?font=N (the bytes of an attached font).
+	_, fonts := c.GetQuery("fonts")
+	_, font := c.GetQuery("font")
+	if fonts || font {
+		subsFonts(c, tor, spec.InfoHash.HexString(), videoID, *video, files)
 		return
 	}
 

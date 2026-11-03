@@ -87,15 +87,15 @@ func (r mkvRequest) reply(code int, err error) {
 	r.c.Abort()
 }
 
-// fail picks the status by the error: a timeout of the request, a file that is not Matroska, a track that is not
-// there, a format that is not supported.
+// fail picks the status by the error: a timeout of the request, a file that is not Matroska, a track or an attachment that is
+// not there, a format that is not supported.
 func (r mkvRequest) fail(err error) {
 	switch {
 	case r.ctx.Err() != nil:
 		r.reply(http.StatusGatewayTimeout, r.ctx.Err())
 	case errors.Is(err, mkvsubs.ErrNotMatroska), errors.Is(err, mkvsubs.ErrNoTracks):
 		r.reply(http.StatusUnprocessableEntity, err)
-	case errors.Is(err, mkvsubs.ErrNoTrack):
+	case errors.Is(err, mkvsubs.ErrNoTrack), errors.Is(err, mkvsubs.ErrNoAttachment):
 		r.reply(http.StatusNotFound, err)
 	case errors.Is(err, mkvsubs.ErrUnsupportedFormat):
 		r.reply(http.StatusUnsupportedMediaType, err)

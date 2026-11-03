@@ -3,6 +3,8 @@ package api
 import (
 	"reflect"
 	"testing"
+
+	"server/mkvsubs"
 )
 
 func paths(files []torrentFile) []string {
@@ -48,5 +50,20 @@ func TestExternalFontURL(t *testing.T) {
 	want := "/stream/My%20Font.ttf?link=abc&index=3&play"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestFontFileName(t *testing.T) {
+	cases := map[string]string{
+		"Arial.ttf":  "Arial.ttf",
+		"Noto.OTF":   "Noto.OTF",
+		"Coll.ttc":   "Coll.ttc",
+		"Arial":      "Arial.ttf", // an attachment without an extension
+		"font.stuff": "font.stuff.ttf",
+	}
+	for in, want := range cases {
+		if got := fontFileName(mkvsubs.Attachment{Name: in}); got != want {
+			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
 	}
 }
