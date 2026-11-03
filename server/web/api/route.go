@@ -66,6 +66,7 @@ func SetupRoute(route gin.IRouter) {
 	// TMDB settings endpoint
 	authorized.GET("/tmdb/settings", tmdbSettings)
 	// GStreamer
+
 	authorized.GET("/gst/settings", GetGStreamerSettings)
 	authorized.POST("/gst/settings", UpdateGStreamerSettings)
 	// FFProbe
