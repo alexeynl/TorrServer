@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"net/url"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -63,6 +64,14 @@ type TrackInfo struct {
 	IsDolbyVision           bool
 	DolbyVisionProfile      int
 	VideoTransfer           string
+
+	// Embedded subtitle tracks of Matroska files can also be read through the /subs API
+	// (?embedded, see web/api/subs_embedded.go), without the pipeline and with the original
+	// ASS styles. SubsURL is the relative link in the natural form of the track (ASS for ASS/SSA,
+	// WebVTT for text), SubsVTTURL is the same track as WebVTT. Empty for other tracks.
+	// Add from=SEC&to=SEC for a window of the track: a link without "to" reads the whole file.
+	SubsURL    string `json:",omitempty"`
+	SubsVTTURL string `json:",omitempty"`
 }
 
 func (p ProbeInfo) DurationSeconds() int {
@@ -631,6 +640,36 @@ func knownSubtitleCodec(codec string) bool {
 		return true
 	}
 	return false
+}
+
+// withSubsLinks returns a copy of the probe with SubsURL/SubsVTTURL of the embedded subtitle
+// tracks that the /subs API can serve (ASS/SSA and text tracks of Matroska files).
+// The probe comes from a cache: its Tracks are copied, not changed.
+func withSubsLinks(p ProbeInfo, hash string, fileID string) ProbeInfo {
+	if !strings.Contains(strings.ToLower(p.ContainerCapsName+" "+p.Container), "matroska") {
+		return p
+	}
+	tracks := make([]TrackInfo, len(p.Tracks))
+	copy(tracks, p.Tracks)
+	base := "/subs/" + url.PathEscape(hash) + "/" + url.PathEscape(fileID) + "?embedded="
+	for i := range tracks {
+		t := &tracks[i]
+		if t.Type != "subtitle" {
+			continue
+		}
+		link := base + strconv.Itoa(t.Index) + "&format="
+		switch t.Codec {
+		case "ass", "ssa":
+			t.SubsURL = link + "ass"
+		case "subrip", "utf8":
+			t.SubsURL = link + "vtt"
+		default:
+			continue
+		}
+		t.SubsVTTURL = link + "vtt"
+	}
+	p.Tracks = tracks
+	return p
 }
 
 func subtitleCodec(value string) string {

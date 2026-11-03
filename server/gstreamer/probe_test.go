@@ -195,3 +195,37 @@ Properties:
 		}
 	}
 }
+
+func TestWithSubsLinks(t *testing.T) {
+	p := ProbeInfo{
+		ContainerCapsName: "video/x-matroska",
+		Tracks: []TrackInfo{
+			{Type: "video", Index: 0},
+			{Type: "subtitle", Index: 0, Codec: "ass"},
+			{Type: "subtitle", Index: 1, Codec: "utf8"},
+			{Type: "subtitle", Index: 2, Codec: "pgs"},
+		},
+	}
+	got := withSubsLinks(p, "abc", "5")
+	if got.Tracks[0].SubsURL != "" {
+		t.Fatalf("video has a link: %+v", got.Tracks[0])
+	}
+	if got.Tracks[1].SubsURL != "/subs/abc/5?embedded=0&format=ass" || got.Tracks[1].SubsVTTURL != "/subs/abc/5?embedded=0&format=vtt" {
+		t.Fatalf("ASS track = %+v", got.Tracks[1])
+	}
+	if got.Tracks[2].SubsURL != "/subs/abc/5?embedded=1&format=vtt" || got.Tracks[2].SubsVTTURL != got.Tracks[2].SubsURL {
+		t.Fatalf("text track = %+v", got.Tracks[2])
+	}
+	if got.Tracks[3].SubsURL != "" || got.Tracks[3].SubsVTTURL != "" {
+		t.Fatalf("PGS track has a link: %+v", got.Tracks[3])
+	}
+	if p.Tracks[1].SubsURL != "" {
+		t.Fatal("the original probe (a cache entry) was changed")
+	}
+
+	// not Matroska: no /subs links
+	p.ContainerCapsName = "video/quicktime"
+	if links := withSubsLinks(p, "abc", "5"); links.Tracks[1].SubsURL != "" {
+		t.Fatalf("link for a non-Matroska file: %+v", links.Tracks[1])
+	}
+}

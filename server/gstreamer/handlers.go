@@ -71,7 +71,7 @@ func (s *Service) probe(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, probe)
+	c.JSON(http.StatusOK, withSubsLinks(probe, hash, fileID))
 }
 
 func (s *Service) master(c *gin.Context) {
