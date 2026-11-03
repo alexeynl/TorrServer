@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"context"
 	"encoding/binary"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -397,5 +398,123 @@ func TestSrtToASS(t *testing.T) {
 		if got := srtToASS(in); got != want {
 			t.Errorf("srtToASS(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func buildAttachmentMKV(font []byte) []byte {
+	sub := bytes.Join([][]byte{
+		uintElem(idTrackNumber, 1),
+		uintElem(idTrackType, trackTypeSubtitle),
+		elem(idCodecID, []byte("S_TEXT/UTF8")),
+	}, nil)
+	tracks := elem(idTracks, elem(idTrackEntry, sub))
+	info := elem(idInfo, uintElem(idTimestampScale, 1000000))
+	file := func(name, mediaType string, data []byte) []byte {
+		return elem(idAttachedFile,
+			elem(0xBF, []byte{1, 2, 3, 4}), // a CRC-32 element, as ffmpeg writes it
+			elem(idFileName, []byte(name)),
+			elem(idFileMediaType, []byte(mediaType)),
+			uintElem(0x46AE, 7), // FileUID
+			elem(idFileData, data))
+	}
+	attachments := elem(idAttachments,
+		elem(0xBF, []byte{0, 0, 0, 0}),
+		file("Tahoma.ttf", "application/x-truetype-font", font),
+		file("cover.png", "image/png", bytes.Repeat([]byte{1}, 100)),
+		file("Georgia.ttc", "", []byte("ttc-data")),
+		file("noext", "application/vnd.ms-opentype", []byte("otf-data")))
+	cluster := elem(idCluster, uintElem(idTimestamp, 0))
+	ebml := elem(idEBML, elem(0x4282, []byte("matroska")))
+	return append(ebml, elem(idSegment, info, tracks, attachments, cluster)...)
+}
+
+func TestAttachments(t *testing.T) {
+	// more than a megabyte: such data is skipped with Seek, not read through
+	font := bytes.Repeat([]byte{0xAB}, 1<<20+5)
+	data := buildAttachmentMKV(font)
+	f, err := Open(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := f.Attachments()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 4 {
+		t.Fatalf("attachments = %+v", list)
+	}
+	wantNames := []string{"Tahoma.ttf", "cover.png", "Georgia.ttc", "noext"}
+	wantFont := []bool{true, false, true, true}
+	for i, a := range list {
+		if a.Index != i || a.Name != wantNames[i] || a.IsFont() != wantFont[i] {
+			t.Errorf("attachment %d = %+v (font %v)", i, a, a.IsFont())
+		}
+	}
+	if list[0].Size != int64(len(font)) || list[1].Size != 100 {
+		t.Errorf("sizes = %d, %d", list[0].Size, list[1].Size)
+	}
+	if list[2].ContentType() != "font/collection" || list[0].ContentType() != "font/ttf" {
+		t.Errorf("content types: %s, %s", list[0].ContentType(), list[2].ContentType())
+	}
+
+	got, err := f.ReadAttachment(0)
+	if err != nil || !bytes.Equal(got, font) {
+		t.Fatalf("font data differs (err %v, %d bytes)", err, len(got))
+	}
+	if got, err = f.ReadAttachment(3); err != nil || string(got) != "otf-data" {
+		t.Fatalf("attachment 3 = %q, %v", got, err)
+	}
+	if _, err = f.ReadAttachment(9); err != ErrNoAttachment {
+		t.Fatalf("err = %v, want ErrNoAttachment", err)
+	}
+}
+
+func TestNoAttachments(t *testing.T) {
+	f := open(t, "")
+	list, err := f.Attachments()
+	if err != nil || len(list) != 0 {
+		t.Fatalf("attachments = %+v, %v", list, err)
+	}
+}
+
+func TestOpenAttachment(t *testing.T) {
+	font := make([]byte, 3000)
+	for i := range font {
+		font[i] = byte(i % 251)
+	}
+	data := buildAttachmentMKV(font)
+	f, err := Open(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rd, a, err := f.OpenAttachment(0)
+	if err != nil || a.Name != "Tahoma.ttf" {
+		t.Fatalf("OpenAttachment: %+v, %v", a, err)
+	}
+	// a Range-like read: seek into the middle, read a piece, seek from the end
+	if _, err := rd.Seek(1000, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 500)
+	if _, err := io.ReadFull(rd, buf); err != nil || !bytes.Equal(buf, font[1000:1500]) {
+		t.Fatalf("piece differs: %v", err)
+	}
+	if _, err := rd.Seek(-100, io.SeekEnd); err != nil {
+		t.Fatal(err)
+	}
+	tail, err := io.ReadAll(rd)
+	if err != nil || !bytes.Equal(tail, font[len(font)-100:]) {
+		t.Fatalf("tail differs: %v (%d bytes)", err, len(tail))
+	}
+	// the whole attachment, and nothing after its end
+	if _, err := rd.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	all, err := io.ReadAll(rd)
+	if err != nil || !bytes.Equal(all, font) {
+		t.Fatalf("data differs: %v (%d bytes)", err, len(all))
+	}
+	if _, _, err := f.OpenAttachment(9); err != ErrNoAttachment {
+		t.Fatalf("err = %v, want ErrNoAttachment", err)
 	}
 }

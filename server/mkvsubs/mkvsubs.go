@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"math/bits"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -62,6 +63,11 @@ const (
 	idBlock               = 0xA1
 	idBlockDuration       = 0x9B
 	idCues                = 0x1C53BB6B
+	idAttachments         = 0x1941A469
+	idAttachedFile        = 0x61A7
+	idFileName            = 0x466E
+	idFileMediaType       = 0x4660
+	idFileData            = 0x465C
 	idCuePoint            = 0xBB
 	idCueTime             = 0xB3
 	idCueTrackPositions   = 0xB7
@@ -71,9 +77,10 @@ const (
 const (
 	trackTypeSubtitle = 17
 
-	maxMetaSize  = 16 << 20 // Tracks / SeekHead / Info
-	maxCuesSize  = 64 << 20
-	maxBlockSize = 4 << 20 // a subtitle block is a few hundred bytes
+	maxMetaSize       = 16 << 20 // Tracks / SeekHead / Info
+	maxCuesSize       = 64 << 20
+	maxBlockSize      = 4 << 20  // a subtitle block is a few hundred bytes
+	maxAttachmentSize = 32 << 20 // a font; CJK fonts reach tens of megabytes
 
 	// Skipping more than this is done with Seek, less - by reading through.
 	skipSeekThreshold = 1 << 20
@@ -83,6 +90,7 @@ var (
 	ErrNotMatroska       = errors.New("mkvsubs: not a Matroska file")
 	ErrNoTracks          = errors.New("mkvsubs: no Tracks element")
 	ErrNoTrack           = errors.New("mkvsubs: subtitle track not found")
+	ErrNoAttachment      = errors.New("mkvsubs: attachment not found")
 	ErrUnsupportedFormat = errors.New("mkvsubs: only ASS/SSA and text (SRT) tracks are supported")
 	errBadElement        = errors.New("mkvsubs: broken EBML element")
 	errUnknownSize       = errors.New("mkvsubs: elements of unknown size are not supported")
@@ -170,6 +178,9 @@ type File struct {
 	scale        int64 // nanoseconds per timestamp tick
 	tracks       []*Track
 	cuesPos      int64 // -1: no Cues
+	attPos       int64 // -1: no Attachments
+	attachments  []Attachment
+	attLoaded    bool
 	firstCluster int64 // -1: none
 	cues         []cuePoint
 	cuesLoaded   bool
@@ -183,6 +194,7 @@ func Open(src io.ReadSeeker, size int64) (*File, error) {
 		size:         size,
 		scale:        1000000,
 		cuesPos:      -1,
+		attPos:       -1,
 		firstCluster: -1,
 	}
 	st := newStream(src)
@@ -249,6 +261,11 @@ func Open(src io.ReadSeeker, size int64) (*File, error) {
 			if tracksBody, err = st.readBody(sz, maxMetaSize); err != nil {
 				return nil, err
 			}
+		case idAttachments: // only the position is kept: the fonts are big, they are read on demand
+			f.attPos = pos
+			if err := st.skip(sz); err != nil {
+				return nil, err
+			}
 		default:
 			if err := st.skip(sz); err != nil {
 				return nil, err
@@ -286,6 +303,9 @@ func Open(src io.ReadSeeker, size int64) (*File, error) {
 	}
 	if rel, ok := seeks[idCues]; ok {
 		f.cuesPos = f.segData + rel
+	}
+	if rel, ok := seeks[idAttachments]; ok && f.attPos < 0 {
+		f.attPos = f.segData + rel
 	}
 	if infoBody != nil {
 		for _, e := range splitElems(infoBody) {
@@ -714,6 +734,214 @@ func assTime(d time.Duration) string {
 	}
 	cs := int64((d + 5*time.Millisecond) / (10 * time.Millisecond))
 	return fmt.Sprintf("%d:%02d:%02d.%02d", cs/360000, cs/6000%60, cs/100%60, cs%100)
+}
+
+// ---------- Attachments ----------
+
+// Attachment is a file attached to the Matroska file: fonts of the subtitles, covers...
+type Attachment struct {
+	Index     int    `json:"index"` // position among all attachments of the file
+	Name      string `json:"name"`
+	MediaType string `json:"type"`
+	Size      int64  `json:"size"`
+
+	offset int64 // position of the data in the file
+}
+
+// IsFont reports whether the attachment is a font file that the subtitle renderers can use:
+// TrueType, OpenType or a TrueType collection.
+func (a Attachment) IsFont() bool {
+	switch strings.ToLower(path.Ext(a.Name)) {
+	case ".ttf", ".otf", ".ttc":
+		return true
+	case ".woff", ".woff2":
+		return false
+	}
+	t := strings.ToLower(a.MediaType)
+	return strings.Contains(t, "truetype") || strings.Contains(t, "opentype") ||
+		t == "font/ttf" || t == "font/otf" || t == "font/sfnt" || t == "font/collection" || t == "application/font-sfnt"
+}
+
+// ContentType is the type to serve a font attachment with.
+func (a Attachment) ContentType() string {
+	switch strings.ToLower(path.Ext(a.Name)) {
+	case ".otf":
+		return "font/otf"
+	case ".ttc":
+		return "font/collection"
+	}
+	return "font/ttf"
+}
+
+// Attachments returns the attachments of the file. The data is not read (big files are skipped with
+// Seek), so the list costs only the headers: it does not download the fonts of a torrent.
+func (f *File) Attachments() ([]Attachment, error) {
+	if f.attLoaded {
+		return f.attachments, nil
+	}
+	if f.attPos < 0 {
+		f.attLoaded = true
+		return nil, nil
+	}
+	st := newStream(f.src)
+	if err := st.seek(f.attPos); err != nil {
+		return nil, err
+	}
+	id, sz, _, err := st.header()
+	if err != nil {
+		return nil, unexpectedEOF(err)
+	}
+	if id != idAttachments || sz < 0 {
+		f.attLoaded = true
+		return nil, nil
+	}
+	end := st.pos + sz
+	var list []Attachment
+	for st.pos < end {
+		id, size, _, err := st.header()
+		if err != nil {
+			return nil, unexpectedEOF(err)
+		}
+		if size < 0 {
+			return nil, errUnknownSize
+		}
+		if id != idAttachedFile { // CRC-32 and unknown elements
+			if err := st.skip(size); err != nil {
+				return nil, unexpectedEOF(err)
+			}
+			continue
+		}
+		a, ok, err := readAttachedFile(st, st.pos+size)
+		if err != nil {
+			return nil, unexpectedEOF(err)
+		}
+		if ok {
+			a.Index = len(list)
+			list = append(list, a)
+		}
+	}
+	f.attachments, f.attLoaded = list, true
+	return list, nil
+}
+
+// readAttachedFile reads one AttachedFile element (its header is already consumed).
+func readAttachedFile(st *stream, end int64) (a Attachment, ok bool, err error) {
+	for st.pos < end {
+		id, size, _, err := st.header()
+		if err != nil {
+			return a, false, err
+		}
+		if size < 0 {
+			return a, false, errUnknownSize
+		}
+		switch id {
+		case idFileName, idFileMediaType:
+			b, err := st.readBody(size, 4096)
+			if err != nil {
+				return a, false, err
+			}
+			if id == idFileName {
+				a.Name = string(b)
+			} else {
+				a.MediaType = string(b)
+			}
+		case idFileData:
+			a.offset, a.Size, ok = st.pos, size, true
+			if err := st.skip(size); err != nil {
+				return a, false, err
+			}
+		default:
+			if err := st.skip(size); err != nil {
+				return a, false, err
+			}
+		}
+	}
+	return a, ok, nil
+}
+
+// section is an io.ReadSeeker over a part of the file (the data of an attachment). It seeks the underlying
+// reader only when the position differs from where that reader is, so reading a font sequentially costs
+// one Seek.
+type section struct {
+	src       io.ReadSeeker
+	off, size int64
+	pos       int64 // position inside the section
+	cur       int64 // where the underlying reader is, -1 if unknown
+}
+
+func (s *section) Read(p []byte) (int, error) {
+	if s.pos >= s.size {
+		return 0, io.EOF
+	}
+	if left := s.size - s.pos; int64(len(p)) > left {
+		p = p[:left]
+	}
+	if s.cur != s.off+s.pos {
+		if _, err := s.src.Seek(s.off+s.pos, io.SeekStart); err != nil {
+			s.cur = -1
+			return 0, err
+		}
+		s.cur = s.off + s.pos
+	}
+	n, err := s.src.Read(p)
+	s.pos += int64(n)
+	s.cur += int64(n)
+	return n, err
+}
+
+func (s *section) Seek(offset int64, whence int) (int64, error) {
+	var pos int64
+	switch whence {
+	case io.SeekStart:
+		pos = offset
+	case io.SeekCurrent:
+		pos = s.pos + offset
+	case io.SeekEnd:
+		pos = s.size + offset
+	default:
+		return 0, errors.New("mkvsubs: bad whence")
+	}
+	if pos < 0 {
+		return 0, errors.New("mkvsubs: negative position")
+	}
+	s.pos = pos
+	return pos, nil
+}
+
+// OpenAttachment returns a reader of the data of the attachment (it supports Seek, so it can be served with
+// http.ServeContent and Range requests). The reader uses the reader of the file: the two must not be used at
+// the same time.
+func (f *File) OpenAttachment(index int) (io.ReadSeeker, Attachment, error) {
+	list, err := f.Attachments()
+	if err != nil {
+		return nil, Attachment{}, err
+	}
+	if index < 0 || index >= len(list) {
+		return nil, Attachment{}, ErrNoAttachment
+	}
+	a := list[index]
+	return &section{src: f.src, off: a.offset, size: a.Size, cur: -1}, a, nil
+}
+
+// ReadAttachment returns the data of the attachment with the given index.
+func (f *File) ReadAttachment(index int) ([]byte, error) {
+	list, err := f.Attachments()
+	if err != nil {
+		return nil, err
+	}
+	if index < 0 || index >= len(list) {
+		return nil, ErrNoAttachment
+	}
+	a := list[index]
+	st := newStream(f.src)
+	if err := st.seek(a.offset); err != nil {
+		return nil, err
+	}
+	b, err := st.readBody(a.Size, maxAttachmentSize)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
 // ---------- Tracks ----------
