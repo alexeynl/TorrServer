@@ -29,6 +29,8 @@ type subTrackJS struct {
 //	@Description	With "track": return that subtitle file, by default converted to WebVTT.
 //	@Description	"format": "vtt" (default) or "original" (no conversion). "encoding": output charset, default utf8.
 //	@Description	With "fonts": list the fonts for ASS subtitles of the video: [{source, name, type, size, url}].
+//	@Description	With "embedded": list the subtitle tracks inside the video file (Matroska), or one track with "embedded=N"
+//	@Description	(optional "format": ass or vtt; "from" and "to": a window in seconds).
 //
 //	@Tags			API
 //
@@ -38,6 +40,9 @@ type subTrackJS struct {
 //	@Param			format	query	string	false	"vtt (default) or original"
 //	@Param			encoding	query	string	false	"Output encoding, default utf8 (also: windows-1251)"
 //	@Param			fonts	query	string	false	"Present (no value): list the fonts of the video (font files of the torrent near it)"
+//	@Param			embedded	query	string	false	"Present (no value): list the subtitle tracks inside the video file; a number: that track"
+//	@Param			from	query	number	false	"With embedded=N: start of the window, seconds"
+//	@Param			to	query	number	false	"With embedded=N: end of the window, seconds; without it the whole track (reads the whole file)"
 //
 //	@Produce		json
 //	@Produce		text/vtt
@@ -123,6 +128,12 @@ func subsTracks(c *gin.Context) {
 
 	if !subs.IsVideo(video.Path) {
 		c.AbortWithError(http.StatusBadRequest, errors.New("file is not a video"))
+		return
+	}
+
+	// Embedded subtitles of a Matroska file: ?embedded (list) or ?embedded=N (one track).
+	if _, ok := c.GetQuery("embedded"); ok {
+		embeddedSubs(c, tor, spec.InfoHash.HexString(), videoID, *video)
 		return
 	}
 
