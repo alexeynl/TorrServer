@@ -484,6 +484,7 @@ const Torrent = ({ torrent }) => {
               captionSrc={selectedPlayer.hls ? '' : getVideoCaption(selectedPlayer.path)}
               hls={selectedPlayer.hls}
               heartbeatSrc={selectedPlayer.heartbeatSrc}
+              audioSource={selectedPlayer.hls ? { hash, fileId: selectedPlayer.id } : undefined}
               initiallyOpen
               showTrigger={false}
               onClose={() => setSelectedPlayer(null)}
