@@ -1,6 +1,7 @@
 import axios from 'axios'
 
-import { gstreamerProbeUrl } from './GStreamer'
+import { externalAudioIndex, gstreamerProbeUrl, loadExternalAudioTracks } from './GStreamer'
+import { humanizeSize } from './Utils'
 
 const probeTrackValue = (track, name) => track?.[name] ?? track?.[`${name[0].toLowerCase()}${name.slice(1)}`]
 
@@ -63,16 +64,45 @@ const audioTrackLabel = (track, ordinal, t) => {
   }
 }
 
+// Separate audio files from the torrent (GET /audio/{hash}/{id}); they follow the embedded tracks.
+const externalAudioLabel = (track, ordinal, t) => {
+  const trackTitle = String(probeTrackValue(track, 'Title') || '').trim()
+  const fileName = String(probeTrackValue(track, 'Name') || '').trim()
+  const language = String(probeTrackValue(track, 'Lang') || '').trim()
+  const format = String(probeTrackValue(track, 'Format') || '').trim()
+  const size = Number(probeTrackValue(track, 'Size'))
+  const details = [
+    t('GStreamer.ExternalAudio'),
+    trackTitle && language ? language.toUpperCase() : '',
+    format.toUpperCase(),
+    size > 0 ? humanizeSize(size) : '',
+  ].filter(Boolean)
+  return {
+    primary: trackTitle || language.toUpperCase() || fileName || `${t('GStreamer.AudioTrack')} ${ordinal + 1}`,
+    secondary: details.join(' / '),
+  }
+}
+
 // One entry per selectable track; audio is the value of the "audio" parameter of master.m3u8.
-export const buildAudioOptions = (probe, t) =>
-  probeAudioTracks(probe).map((track, ordinal) => {
+export const buildAudioOptions = (probe, externalTracks, t) => [
+  ...probeAudioTracks(probe).map((track, ordinal) => {
     const value = Number(probeTrackValue(track, 'Index'))
     const audio = Number.isInteger(value) && value >= 0 ? value : ordinal
     return { key: `embedded:${audio}`, audio, external: false, ...audioTrackLabel(track, ordinal, t) }
-  })
+  }),
+  ...externalTracks.map((track, ordinal) => ({
+    key: `external:${ordinal}`,
+    audio: externalAudioIndex(ordinal),
+    external: true,
+    ...externalAudioLabel(track, ordinal, t),
+  })),
+]
 
-// Rejects when the probe fails.
+// Rejects when the probe fails; a failed /audio request only means "no external tracks".
 export const loadAudioOptions = async (hash, fileId, t) => {
-  const { data: probe } = await axios.get(gstreamerProbeUrl(hash, fileId))
-  return buildAudioOptions(probe, t)
+  const [{ data: probe }, externalTracks] = await Promise.all([
+    axios.get(gstreamerProbeUrl(hash, fileId)),
+    loadExternalAudioTracks(hash, fileId),
+  ])
+  return buildAudioOptions(probe, externalTracks, t)
 }

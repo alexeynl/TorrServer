@@ -77,6 +77,7 @@
     "AppSinkBuffersHint": "Lista de buffere AppSink pregătite. De obicei, lăsați valoarea implicită.",
     "AudioTrack": "Pistă audio",
     "Discoverer": "gst-discoverer",
+    "ExternalAudio": "Fișier extern",
     "HDRToSDR": "Convertire HDR în SDR",
     "HDRToSDRHint": "Tone-map pentru video PQ/HLG și transcodare în SDR H.264.",
     "HardwareAcceleration": "Encoder H.264 hardware",

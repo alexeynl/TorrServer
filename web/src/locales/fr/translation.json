@@ -75,6 +75,7 @@
     "AACSamplerateHint": "0 sélectionne la fréquence source prise en charge la plus proche ; valeur de repli : 48000 Hz.",
     "AudioTrack": "Piste audio",
     "Discoverer": "gst-discoverer",
+    "ExternalAudio": "Fichier externe",
     "HDRToSDR": "Convertir HDR en SDR",
     "HDRToSDRHint": "Tone-map la vidéo PQ/HLG et la transcode en SDR H.264.",
     "HardwareAcceleration": "Encodeur H.264 matériel",

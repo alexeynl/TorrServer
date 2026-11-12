@@ -1,6 +1,7 @@
 import { forwardRef, memo, useEffect, useRef, useState } from 'react'
 import {
   Audiotrack as AudiotrackIcon,
+  LibraryMusic as LibraryMusicIcon,
   UnfoldMore as UnfoldMoreIcon,
   PlayArrow as PlayArrowIcon,
   Close as CloseIcon,
@@ -390,7 +391,7 @@ const Torrent = ({ torrent }) => {
                   {audioMenuOptions.map(option => (
                     <MenuItem key={option.key} onClick={() => selectAudioTrack(option)}>
                       <ListItemIcon style={{ minWidth: 34 }}>
-                        <AudiotrackIcon fontSize='small' />
+                        {option.external ? <LibraryMusicIcon fontSize='small' /> : <AudiotrackIcon fontSize='small' />}
                       </ListItemIcon>
                       <ListItemText primary={option.primary} secondary={option.secondary} />
                     </MenuItem>

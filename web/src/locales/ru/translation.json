@@ -75,6 +75,7 @@
     "AACSamplerateHint": "0 — ближайшая поддерживаемая частота к исходной; если неизвестно — 48 000 Гц.",
     "AudioTrack": "Аудиодорожка",
     "Discoverer": "gst-discoverer",
+    "ExternalAudio": "Внешний файл",
     "HDRToSDR": "Преобразовать HDR в SDR",
     "HDRToSDRHint": "Tone mapping PQ/HLG и перекодирование видео в SDR H.264.",
     "HardwareAcceleration": "Аппаратный H.264 encoder",

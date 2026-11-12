@@ -75,6 +75,7 @@
     "AACSamplerateHint": "0 selects the nearest supported source rate; fallback is 48000 Hz.",
     "AudioTrack": "Audio track",
     "Discoverer": "gst-discoverer",
+    "ExternalAudio": "External file",
     "HDRToSDR": "Convert HDR to SDR",
     "HDRToSDRHint": "Tone-map PQ/HLG video and transcode it to SDR H.264.",
     "HardwareAcceleration": "Hardware H.264 encoder",
