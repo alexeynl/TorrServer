@@ -40,11 +40,11 @@ import { isFilePlayable } from 'components/DialogTorrentDetailsContent/helpers'
 import {
   gstreamerHeartbeatUrl,
   gstreamerMasterUrl,
-  gstreamerProbeUrl,
   shouldUseGStreamerPlayer,
   useGStreamerRuntime,
 } from 'utils/GStreamer'
 import { externalLink, useExternalMediaBase } from 'utils/MediaBase'
+import { loadAudioOptions } from 'utils/AudioTracks'
 
 import {
   StatusIndicators,
@@ -90,49 +90,6 @@ const episodeLabel = (path, index) => {
   }`
   const title = parsed.title || name.replace(/\.[^/.]+$/, '')
   return code ? `${code} - ${title}` : `${index + 1}. ${title}`
-}
-
-const probeTrackValue = (track, name) => track?.[name] ?? track?.[`${name[0].toLowerCase()}${name.slice(1)}`]
-
-const probeAudioTracks = probe =>
-  (probe?.Tracks || probe?.tracks || []).filter(
-    track => String(probeTrackValue(track, 'Type')).toLowerCase() === 'audio',
-  )
-
-const audioCodecName = track => {
-  const codec = String(probeTrackValue(track, 'Codec') || '')
-  const caps = String(probeTrackValue(track, 'CapsName') || '')
-  const value = `${caps} ${codec}`.toLowerCase()
-
-  switch (true) {
-    case value.includes('eac3') || value.includes('e-ac3') || value.includes('e-ac-3'):
-      return 'E-AC3'
-    case value.includes('truehd') || value.includes('true-hd') || value.includes('mlp'):
-      return 'TrueHD'
-    case value.includes('ac3') || value.includes('ac-3') || value.includes('a/52'):
-      return 'AC3'
-    case value.includes('dts'):
-      return 'DTS'
-    case value.includes('aac') || value.includes('mpegversion=(int)4') || value.includes('mpegversion=4'):
-      return 'AAC'
-    case value.includes('opus'):
-      return 'Opus'
-    case value.includes('vorbis'):
-      return 'Vorbis'
-    case value.includes('flac'):
-      return 'FLAC'
-    case value.includes('mp3') || value.includes('layer=(int)3'):
-      return 'MP3'
-    case value.includes('pcm') || value.includes('audio/x-raw'):
-      return 'PCM'
-    default: {
-      const shortName = (caps || codec).split(',')[0].trim()
-      return shortName
-        .replace(/^audio\/(?:x-)?/i, '')
-        .replace(/[_-]+/g, ' ')
-        .toUpperCase()
-    }
-  }
 }
 
 const sameFileList = (left, right) => {
@@ -287,7 +244,7 @@ const Torrent = ({ torrent }) => {
   const players = playableVideoList.map(createPlayer)
   const availablePlayers = players.filter(player => !unsupportedPlayers[player.key])
   const singlePlayer = players.length === 1 ? players[0] : null
-  const audioMenuTracks = audioMenuPlayer ? audioTracksByFile[audioMenuPlayer.id] || [] : []
+  const audioMenuOptions = audioMenuPlayer ? audioTracksByFile[audioMenuPlayer.id] || [] : []
 
   const openSingleFileInVlc = () => {
     if (!singlePlayer) return
@@ -302,8 +259,8 @@ const Torrent = ({ torrent }) => {
     playerTitle: title || player.label,
   })
 
-  const showAudioTracks = (player, tracks, anchor) => {
-    if (!tracks.length) {
+  const showAudioTracks = (player, options, anchor) => {
+    if (!options.length) {
       setSelectedPlayer(playerWithAudio(player, 0))
       return
     }
@@ -327,12 +284,12 @@ const Torrent = ({ torrent }) => {
 
     setIsResolvingAudio(true)
     try {
-      const { data: probe } = await axios.get(gstreamerProbeUrl(hash, player.id))
+      // only a failed probe falls back to the default track
+      const options = await loadAudioOptions(hash, player.id, t)
       if (!isMounted.current) return
 
-      const tracks = probeAudioTracks(probe)
-      setAudioTracksByFile(current => ({ ...current, [player.id]: tracks }))
-      showAudioTracks(player, tracks, anchor)
+      setAudioTracksByFile(current => ({ ...current, [player.id]: options }))
+      showAudioTracks(player, options, anchor)
     } catch (_) {
       if (isMounted.current) setSelectedPlayer(playerWithAudio(player, 0))
     } finally {
@@ -340,30 +297,10 @@ const Torrent = ({ torrent }) => {
     }
   }
 
-  const audioTrackLabel = (track, ordinal) => {
-    const trackTitle = String(probeTrackValue(track, 'Title') || '').trim()
-    const language = String(probeTrackValue(track, 'Language') || '').trim()
-    const codec = audioCodecName(track)
-    const channels = Number(probeTrackValue(track, 'Channels'))
-    const rate = Number(probeTrackValue(track, 'Rate'))
-    const details = [
-      trackTitle && language ? language.toUpperCase() : '',
-      codec,
-      channels > 0 ? `${channels} ch` : '',
-      rate > 0 ? `${Math.round(rate / 1000)} kHz` : '',
-    ].filter(Boolean)
-    return {
-      primary: trackTitle || language.toUpperCase() || `${t('GStreamer.AudioTrack')} ${ordinal + 1}`,
-      secondary: details.join(' / '),
-    }
-  }
-
-  const selectAudioTrack = (track, ordinal) => {
+  const selectAudioTrack = option => {
     if (!audioMenuPlayer) return
-    const value = Number(probeTrackValue(track, 'Index'))
-    const audio = Number.isInteger(value) && value >= 0 ? value : ordinal
     setAudioMenuAnchor(null)
-    setSelectedPlayer(playerWithAudio(audioMenuPlayer, audio))
+    setSelectedPlayer(playerWithAudio(audioMenuPlayer, option.audio))
   }
 
   useEffect(() => {
@@ -450,18 +387,14 @@ const Torrent = ({ torrent }) => {
                   transformOrigin={{ vertical: 'top', horizontal: 'left' }}
                   PaperProps={{ style: { maxHeight: '65vh', width: 420, maxWidth: 'calc(100vw - 32px)' } }}
                 >
-                  {audioMenuTracks.map((track, ordinal) => {
-                    const label = audioTrackLabel(track, ordinal)
-                    const index = probeTrackValue(track, 'Index') ?? ordinal
-                    return (
-                      <MenuItem key={index} onClick={() => selectAudioTrack(track, ordinal)}>
-                        <ListItemIcon style={{ minWidth: 34 }}>
-                          <AudiotrackIcon fontSize='small' />
-                        </ListItemIcon>
-                        <ListItemText primary={label.primary} secondary={label.secondary} />
-                      </MenuItem>
-                    )
-                  })}
+                  {audioMenuOptions.map(option => (
+                    <MenuItem key={option.key} onClick={() => selectAudioTrack(option)}>
+                      <ListItemIcon style={{ minWidth: 34 }}>
+                        <AudiotrackIcon fontSize='small' />
+                      </ListItemIcon>
+                      <ListItemText primary={option.primary} secondary={option.secondary} />
+                    </MenuItem>
+                  ))}
                 </Menu>
               </>
             ) : (
